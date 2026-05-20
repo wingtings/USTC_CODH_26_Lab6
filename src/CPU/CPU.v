@@ -234,7 +234,19 @@ wire [31:0] xor_res = alu_src1 ^ alu_src2;
 wire [31:0] or_res = alu_src1 | alu_src2;
 wire [31:0] and_res = alu_src1 & alu_src2;
 
-wire [31:0] alu_res = (ID_EX_is_lui) ? alu_src2 :
+wire ID_EX_is_mul = (ID_EX_inst[6:0] == 7'b0110011) && (ID_EX_funct7 == 7'b0000001);
+wire [32:0] mul_src1 = (ID_EX_funct3 == 3'b011) ? {1'b0, alu_src1} : {alu_src1[31], alu_src1};
+wire [32:0] mul_src2 = (ID_EX_funct3 == 3'b011) ? {1'b0, alu_src2} : {alu_src2[31], alu_src2};
+wire [65:0] mul_res_66;
+Mul_33 u_mul(
+    .a(mul_src1),
+    .b(mul_src2),
+    .res(mul_res_66)
+);
+wire [31:0] final_mul_res = (ID_EX_funct3 == 3'b000) ? mul_res_66[31:0] : mul_res_66[63:32];
+
+wire [31:0] alu_res = (ID_EX_is_mul) ? final_mul_res :
+                      (ID_EX_is_lui) ? alu_src2 :
                       (ID_EX_is_jal | ID_EX_is_jalr) ? (ID_EX_pc + 4) :
                       (ID_EX_is_add_forced) ? add_res :
                       (ID_EX_funct3 == 3'b000) ? (ID_EX_is_sub ? sub_res : add_res) :
