@@ -86,10 +86,12 @@ reg [ 2:0] MEM_WB_funct3;
 
 reg [31:0] pc;
 wire       stall, PC_write, IF_ID_write, flush_IF_ID, flush_ID_EX;
+// 多周期除法器停顿：除法在 EX 段计算期间冻结 PC/IF-ID/ID-EX，并向 EX/MEM 注入气泡
+wire       div_stall, div_done, div_busy;
 
 always @(posedge clk) begin
     if (rst) pc <= 32'h00400000;
-    else if (global_en && valid && PC_write) pc <= nextpc;
+    else if (global_en && valid && PC_write && !div_stall) pc <= nextpc;
 end
 
 always @(posedge clk) begin
@@ -101,7 +103,7 @@ always @(posedge clk) begin
         IF_ID_pred_history <= 2'b0;
         IF_ID_pred_ghr <= 10'b0;
         IF_ID_pred_is_global <= 1'b0;
-    end else if (global_en && valid && IF_ID_write) begin
+    end else if (global_en && valid && IF_ID_write && !div_stall) begin
         IF_ID_valid <= 1'b1;
         IF_ID_pc   <= pc;
         IF_ID_inst <= imem_rdata;
@@ -242,7 +244,7 @@ always @(posedge clk) begin
         ID_EX_pred_history  <= 2'b0;
         ID_EX_pred_ghr      <= 10'b0;
         ID_EX_pred_is_global<= 1'b0;
-    end else if (global_en && valid) begin
+    end else if (global_en && valid && !div_stall) begin
         ID_EX_valid         <= IF_ID_valid;
         ID_EX_pc            <= IF_ID_pc;
         ID_EX_inst          <= IF_ID_inst;
@@ -303,7 +305,7 @@ wire ID_EX_is_div = ID_EX_is_m &&  ID_EX_funct3[2];
 wire [32:0] mul_src1 = (ID_EX_funct3 == 3'b011) ? {1'b0, ex_fw_rv1} : {ex_fw_rv1[31], ex_fw_rv1};
 wire [32:0] mul_src2 = (ID_EX_funct3 == 3'b011) ? {1'b0, ex_fw_rv2} : {ex_fw_rv2[31], ex_fw_rv2};
 wire [65:0] mul_res_66;
-Mul_33 u_mul(
+Mul_wallace u_mul(
     .a(mul_src1),
     .b(mul_src2),
     .res(mul_res_66)
@@ -311,11 +313,20 @@ Mul_33 u_mul(
 wire [31:0] final_mul_res = (ID_EX_funct3 == 3'b000) ? mul_res_66[31:0] : mul_res_66[63:32];
 
 // 除法：funct3 100=div 101=divu 110=rem 111=remu。is_signed=~funct3[0]，funct3[1] 选商/余数
+// 多周期 Radix-2 移位除法器：req 在 EX 段有除法指令时拉高，done 时结果就绪并放行流水线。
 wire [31:0] div_q, div_r;
+wire        div_in_ex = ID_EX_valid && ID_EX_is_div;
+assign      div_stall = div_in_ex && !div_done;   // 除法未完成时停顿流水线
 Div u_div(
+    .clk(clk),
+    .rst(rst),
+    .en(global_en && valid),
+    .req(div_in_ex),
     .a(ex_fw_rv1),
     .b(ex_fw_rv2),
     .is_signed(~ID_EX_funct3[0]),
+    .busy(div_busy),
+    .done(div_done),
     .quotient(div_q),
     .remainder(div_r)
 );
@@ -366,17 +377,32 @@ always @(posedge clk) begin
         EX_MEM_funct3        <= 3'b0;
         EX_MEM_is_system     <= 1'b0;
     end else if (global_en && valid) begin
-        EX_MEM_valid         <= ID_EX_valid;
-        EX_MEM_pc            <= ID_EX_pc;
-        EX_MEM_inst          <= ID_EX_inst;
-        EX_MEM_alu_res       <= alu_res;
-        EX_MEM_store_data    <= ex_fw_rv2;
-        EX_MEM_rd            <= ID_EX_rd;
-        EX_MEM_reg_we        <= ID_EX_reg_we;
-        EX_MEM_dmem_we       <= ID_EX_is_store;
-        EX_MEM_is_load       <= ID_EX_is_load;
-        EX_MEM_funct3        <= ID_EX_funct3;
-        EX_MEM_is_system     <= ID_EX_is_system;
+        if (div_stall) begin
+            // 除法计算期间向 EX/MEM 注入气泡，避免未就绪结果写回/访存
+            EX_MEM_valid         <= 1'b0;
+            EX_MEM_pc            <= ID_EX_pc;
+            EX_MEM_inst          <= 32'h00000013; // nop
+            EX_MEM_alu_res       <= 32'b0;
+            EX_MEM_store_data    <= 32'b0;
+            EX_MEM_rd            <= 5'b0;
+            EX_MEM_reg_we        <= 1'b0;
+            EX_MEM_dmem_we       <= 1'b0;
+            EX_MEM_is_load       <= 1'b0;
+            EX_MEM_funct3        <= 3'b0;
+            EX_MEM_is_system     <= 1'b0;
+        end else begin
+            EX_MEM_valid         <= ID_EX_valid;
+            EX_MEM_pc            <= ID_EX_pc;
+            EX_MEM_inst          <= ID_EX_inst;
+            EX_MEM_alu_res       <= alu_res;
+            EX_MEM_store_data    <= ex_fw_rv2;
+            EX_MEM_rd            <= ID_EX_rd;
+            EX_MEM_reg_we        <= ID_EX_reg_we;
+            EX_MEM_dmem_we       <= ID_EX_is_store;
+            EX_MEM_is_load       <= ID_EX_is_load;
+            EX_MEM_funct3        <= ID_EX_funct3;
+            EX_MEM_is_system     <= ID_EX_is_system;
+        end
     end
 end
 
