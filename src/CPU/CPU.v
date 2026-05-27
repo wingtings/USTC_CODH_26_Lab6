@@ -44,16 +44,21 @@ end
 reg        IF_ID_valid;
 reg [31:0] IF_ID_pc;
 reg [31:0] IF_ID_inst;
+reg        IF_ID_pred_taken;
+reg [ 1:0] IF_ID_pred_history;
 
 // ID/EX 段
 reg        ID_EX_valid;
 reg [31:0] ID_EX_pc;
 reg [31:0] ID_EX_inst;
+reg        ID_EX_pred_taken;
+reg [ 1:0] ID_EX_pred_history;
 reg [31:0] ID_EX_rv1, ID_EX_rv2, ID_EX_imm;
 reg [ 4:0] ID_EX_rs1, ID_EX_rs2, ID_EX_rd;
 reg        ID_EX_is_load, ID_EX_is_store;
 reg        ID_EX_reg_we, ID_EX_dmem_we;
 reg [ 2:0] ID_EX_funct3;
+reg        ID_EX_is_branch;
 
 // EX/MEM 段
 reg        EX_MEM_valid;
@@ -88,10 +93,14 @@ always @(posedge clk) begin
         IF_ID_valid <= 1'b0;
         IF_ID_pc   <= 32'b0;
         IF_ID_inst <= 32'h00000013; // nop (addi x0, x0, 0)
+        IF_ID_pred_taken <= 1'b0;
+        IF_ID_pred_history <= 2'b0;
     end else if (global_en && valid && IF_ID_write) begin
         IF_ID_valid <= 1'b1;
         IF_ID_pc   <= pc;
         IF_ID_inst <= imem_rdata;
+        IF_ID_pred_taken <= pred_taken;
+        IF_ID_pred_history <= pred_history;
     end
 end
 
@@ -104,7 +113,36 @@ wire jump_taken;
 wire branch_taken;
 wire [31:0] jump_branch_target;
 
-wire [31:0] nextpc = (jump_taken || branch_taken) ? jump_branch_target : (pc + 4);
+wire pred_mismatch = ID_EX_is_branch && (ID_EX_pred_taken != branch_taken);
+
+wire pred_taken;
+wire [1:0] pred_history;
+
+BranchPredictor u_bp(
+    .clk(clk),
+    .rst(rst),
+    .pc_if(pc),
+    .pred_taken(pred_taken),
+    .pred_history(pred_history),
+    .pc_ex(ID_EX_pc),
+    .is_branch_ex(ID_EX_is_branch),
+    .actual_taken(branch_taken),
+    .pred_wrong(pred_mismatch),
+    .pred_history_ex(ID_EX_pred_history)
+);
+
+// Target prediction
+wire [31:0] if_inst = imem_rdata;
+wire if_is_branch = (if_inst[6:0] == 7'b1100011);
+wire [31:0] if_imm_B = {{20{if_inst[31]}}, if_inst[7], if_inst[30:25], if_inst[11:8], 1'b0};
+wire if_pred_jump = if_is_branch && pred_taken;
+wire [31:0] if_pred_target = pc + if_imm_B;
+
+wire [31:0] nextpc = 
+    pred_mismatch ? (branch_taken ? (ID_EX_pc + ID_EX_imm) : (ID_EX_pc + 4)) :
+    jump_taken ? jump_branch_target : 
+    if_pred_jump ? if_pred_target : 
+    (pc + 4);
 
 // ==========================================
 // Decode Stage (ID)
@@ -152,7 +190,7 @@ regfile u_regfile(
 );
 
 // ID/EX Register Update
-reg        ID_EX_is_jal, ID_EX_is_jalr, ID_EX_is_branch;
+reg        ID_EX_is_jal, ID_EX_is_jalr;
 reg        ID_EX_is_auipc, ID_EX_is_lui;
 reg        ID_EX_is_sub, ID_EX_is_sra;
 reg        ID_EX_is_add_forced;
@@ -186,10 +224,14 @@ always @(posedge clk) begin
         ID_EX_is_add_forced <= 1'b0;
         ID_EX_is_system     <= 1'b0;
         ID_EX_is_imm        <= 1'b0;
+        ID_EX_pred_taken    <= 1'b0;
+        ID_EX_pred_history  <= 2'b0;
     end else if (global_en && valid) begin
         ID_EX_valid         <= IF_ID_valid;
         ID_EX_pc            <= IF_ID_pc;
         ID_EX_inst          <= IF_ID_inst;
+        ID_EX_pred_taken    <= IF_ID_pred_taken;
+        ID_EX_pred_history  <= IF_ID_pred_history;
         ID_EX_rv1           <= id_rv1;
         ID_EX_rv2           <= id_rv2;
         ID_EX_imm           <= id_imm;
@@ -391,7 +433,7 @@ HazardUnit u_hazard(
     .rf_wa_ex(ID_EX_rd),
     .rf_we_ex(ID_EX_reg_we),
     .rf_wd_sel_ex(ID_EX_is_load),
-    .npc_sel_ex(branch_taken || jump_taken),
+    .npc_sel_ex(pred_mismatch || jump_taken),
     .PC_write(PC_write),
     .IF_ID_write(IF_ID_write),
     .stall(stall),

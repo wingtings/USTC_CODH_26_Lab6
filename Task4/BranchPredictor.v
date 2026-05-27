@@ -79,11 +79,11 @@ module BranchPredictor (
     wire local_correct  = (local_pred == actual_taken);
     wire selector_agrees_with_actual = (final_pred == actual_taken);
     
+    integer i;
     always @(posedge clk) begin
         if (rst) begin
             // 初始化
             integer i;
-            ghr <= 10'b0;
             for (i = 0; i < 256; i = i + 1)
                 bht[i] <= 2'b01;
             for (i = 0; i < 512; i = i + 1)
