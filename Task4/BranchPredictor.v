@@ -83,7 +83,6 @@ module BranchPredictor (
     always @(posedge clk) begin
         if (rst) begin
             // 初始化
-            integer i;
             for (i = 0; i < 256; i = i + 1)
                 bht[i] <= 2'b01;
             for (i = 0; i < 512; i = i + 1)

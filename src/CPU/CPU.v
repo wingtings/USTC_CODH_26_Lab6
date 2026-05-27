@@ -46,6 +46,8 @@ reg [31:0] IF_ID_pc;
 reg [31:0] IF_ID_inst;
 reg        IF_ID_pred_taken;
 reg [ 1:0] IF_ID_pred_history;
+reg [ 9:0] IF_ID_pred_ghr;
+reg        IF_ID_pred_is_global;
 
 // ID/EX 段
 reg        ID_EX_valid;
@@ -53,6 +55,8 @@ reg [31:0] ID_EX_pc;
 reg [31:0] ID_EX_inst;
 reg        ID_EX_pred_taken;
 reg [ 1:0] ID_EX_pred_history;
+reg [ 9:0] ID_EX_pred_ghr;
+reg        ID_EX_pred_is_global;
 reg [31:0] ID_EX_rv1, ID_EX_rv2, ID_EX_imm;
 reg [ 4:0] ID_EX_rs1, ID_EX_rs2, ID_EX_rd;
 reg        ID_EX_is_load, ID_EX_is_store;
@@ -95,12 +99,16 @@ always @(posedge clk) begin
         IF_ID_inst <= 32'h00000013; // nop (addi x0, x0, 0)
         IF_ID_pred_taken <= 1'b0;
         IF_ID_pred_history <= 2'b0;
+        IF_ID_pred_ghr <= 10'b0;
+        IF_ID_pred_is_global <= 1'b0;
     end else if (global_en && valid && IF_ID_write) begin
         IF_ID_valid <= 1'b1;
         IF_ID_pc   <= pc;
         IF_ID_inst <= imem_rdata;
         IF_ID_pred_taken <= pred_taken;
         IF_ID_pred_history <= pred_history;
+        IF_ID_pred_ghr <= pred_ghr;
+        IF_ID_pred_is_global <= pred_is_global;
     end
 end
 
@@ -117,6 +125,8 @@ wire pred_mismatch = ID_EX_is_branch && (ID_EX_pred_taken != branch_taken);
 
 wire pred_taken;
 wire [1:0] pred_history;
+wire [9:0] pred_ghr;
+wire pred_is_global;
 
 BranchPredictor u_bp(
     .clk(clk),
@@ -124,11 +134,15 @@ BranchPredictor u_bp(
     .pc_if(pc),
     .pred_taken(pred_taken),
     .pred_history(pred_history),
+    .pred_ghr(pred_ghr),
+    .pred_is_global(pred_is_global),
     .pc_ex(ID_EX_pc),
     .is_branch_ex(ID_EX_is_branch),
     .actual_taken(branch_taken),
     .pred_wrong(pred_mismatch),
-    .pred_history_ex(ID_EX_pred_history)
+    .pred_history_ex(ID_EX_pred_history),
+    .pred_ghr_ex(ID_EX_pred_ghr),
+    .pred_is_global_ex(ID_EX_pred_is_global)
 );
 
 // Target prediction
@@ -226,12 +240,16 @@ always @(posedge clk) begin
         ID_EX_is_imm        <= 1'b0;
         ID_EX_pred_taken    <= 1'b0;
         ID_EX_pred_history  <= 2'b0;
+        ID_EX_pred_ghr      <= 10'b0;
+        ID_EX_pred_is_global<= 1'b0;
     end else if (global_en && valid) begin
         ID_EX_valid         <= IF_ID_valid;
         ID_EX_pc            <= IF_ID_pc;
         ID_EX_inst          <= IF_ID_inst;
         ID_EX_pred_taken    <= IF_ID_pred_taken;
         ID_EX_pred_history  <= IF_ID_pred_history;
+        ID_EX_pred_ghr      <= IF_ID_pred_ghr;
+        ID_EX_pred_is_global<= IF_ID_pred_is_global;
         ID_EX_rv1           <= id_rv1;
         ID_EX_rv2           <= id_rv2;
         ID_EX_imm           <= id_imm;
@@ -276,9 +294,14 @@ wire [31:0] xor_res = alu_src1 ^ alu_src2;
 wire [31:0] or_res = alu_src1 | alu_src2;
 wire [31:0] and_res = alu_src1 & alu_src2;
 
-wire ID_EX_is_mul = (ID_EX_inst[6:0] == 7'b0110011) && (ID_EX_funct7 == 7'b0000001);
-wire [32:0] mul_src1 = (ID_EX_funct3 == 3'b011) ? {1'b0, alu_src1} : {alu_src1[31], alu_src1};
-wire [32:0] mul_src2 = (ID_EX_funct3 == 3'b011) ? {1'b0, alu_src2} : {alu_src2[31], alu_src2};
+// RV32M: opcode 0110011 + funct7 0000001。funct3[2]==0 为乘法类，==1 为除法类。
+wire ID_EX_is_m   = (ID_EX_inst[6:0] == 7'b0110011) && (ID_EX_funct7 == 7'b0000001);
+wire ID_EX_is_mul = ID_EX_is_m && ~ID_EX_funct3[2];
+wire ID_EX_is_div = ID_EX_is_m &&  ID_EX_funct3[2];
+
+// 乘法：mulhu(funct3==011) 零扩展，mul/mulh 符号扩展到 33 位
+wire [32:0] mul_src1 = (ID_EX_funct3 == 3'b011) ? {1'b0, ex_fw_rv1} : {ex_fw_rv1[31], ex_fw_rv1};
+wire [32:0] mul_src2 = (ID_EX_funct3 == 3'b011) ? {1'b0, ex_fw_rv2} : {ex_fw_rv2[31], ex_fw_rv2};
 wire [65:0] mul_res_66;
 Mul_33 u_mul(
     .a(mul_src1),
@@ -287,7 +310,19 @@ Mul_33 u_mul(
 );
 wire [31:0] final_mul_res = (ID_EX_funct3 == 3'b000) ? mul_res_66[31:0] : mul_res_66[63:32];
 
-wire [31:0] alu_res = (ID_EX_is_mul) ? final_mul_res :
+// 除法：funct3 100=div 101=divu 110=rem 111=remu。is_signed=~funct3[0]，funct3[1] 选商/余数
+wire [31:0] div_q, div_r;
+Div u_div(
+    .a(ex_fw_rv1),
+    .b(ex_fw_rv2),
+    .is_signed(~ID_EX_funct3[0]),
+    .quotient(div_q),
+    .remainder(div_r)
+);
+wire [31:0] final_div_res = ID_EX_funct3[1] ? div_r : div_q;
+
+wire [31:0] alu_res = (ID_EX_is_div) ? final_div_res :
+                      (ID_EX_is_mul) ? final_mul_res :
                       (ID_EX_is_lui) ? alu_src2 :
                       (ID_EX_is_jal | ID_EX_is_jalr) ? (ID_EX_pc + 4) :
                       (ID_EX_is_add_forced) ? add_res :
