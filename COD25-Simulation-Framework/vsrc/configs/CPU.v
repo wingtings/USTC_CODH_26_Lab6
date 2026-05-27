@@ -16,7 +16,8 @@ module CPU(
     output wire        dmem_we,
 
     // cache interface
-    output wire        cache_miss,  // 新增：Cache 未命中信号
+    input  wire        cache_miss,  // Cache 未命中信号（由外部 cache 驱动）
+    output wire        dmem_re,     // data memory read enable (EX/MEM stage load)
 
     // trace debug
     output wire        commit,
@@ -87,6 +88,9 @@ reg [31:0] MEM_WB_load_data; // 或dmem_rdata
 reg [ 4:0] MEM_WB_rd;
 reg        MEM_WB_reg_we, MEM_WB_is_load;
 reg [ 2:0] MEM_WB_funct3;
+reg        MEM_WB_dmem_we;
+reg [31:0] MEM_WB_dmem_wa;
+reg [31:0] MEM_WB_dmem_wd;
 
 reg [31:0] pc;
 wire       stall, PC_write, IF_ID_write, flush_IF_ID, flush_ID_EX;
@@ -418,7 +422,7 @@ assign dmem_wdata = (EX_MEM_funct3 == 3'b000) ? ({24'b0, EX_MEM_store_data[7:0]}
                     (EX_MEM_funct3 == 3'b001) ? ({16'b0, EX_MEM_store_data[15:0]} << (mem_offset[1] * 16)) : 
                     EX_MEM_store_data;
 
-assign cache_miss = 1'b0; // 默认不缺失，若有 Cache 模块则连接其信号
+assign dmem_re = EX_MEM_is_load && EX_MEM_valid && valid && global_en;
 
 reg MEM_WB_is_system;
 
@@ -435,6 +439,9 @@ always @(posedge clk) begin
         MEM_WB_is_load       <= 1'b0;
         MEM_WB_funct3        <= 3'b0;
         MEM_WB_is_system     <= 1'b0;
+        MEM_WB_dmem_we       <= 1'b0;
+        MEM_WB_dmem_wa       <= 32'b0;
+        MEM_WB_dmem_wd       <= 32'b0;
     end else if (global_en && valid && MEM_WB_write) begin
         MEM_WB_valid         <= EX_MEM_valid;
         MEM_WB_pc            <= EX_MEM_pc;
@@ -446,6 +453,9 @@ always @(posedge clk) begin
         MEM_WB_is_load       <= EX_MEM_is_load;
         MEM_WB_funct3        <= EX_MEM_funct3;
         MEM_WB_is_system     <= EX_MEM_is_system;
+        MEM_WB_dmem_we       <= EX_MEM_dmem_we;
+        MEM_WB_dmem_wa       <= EX_MEM_alu_res;
+        MEM_WB_dmem_wd       <= EX_MEM_store_data;
     end
 end
 
@@ -467,7 +477,11 @@ wire [31:0] final_load_data = (MEM_WB_funct3 == 3'b000) ? {{24{load_byte[7]}}, l
                               (MEM_WB_funct3 == 3'b101) ? {16'b0, load_half} : MEM_WB_load_data;
 
 // 生成对外围提供的 commit 提交信息
-assign commit        = valid && global_en && MEM_WB_valid;
+assign commit        = valid && global_en && MEM_WB_valid && MEM_WB_write;
+
+always @(posedge clk) begin
+end
+
 assign commit_reg_wd = MEM_WB_is_load ? final_load_data : MEM_WB_alu_res;
 assign commit_reg_we = MEM_WB_reg_we && commit;
 assign commit_reg_wa = MEM_WB_rd;
@@ -475,9 +489,9 @@ assign commit_pc     = MEM_WB_pc;
 assign commit_instr  = MEM_WB_inst;
 assign commit_halt   = MEM_WB_is_system && (MEM_WB_inst == 32'h00100073) && commit;
 
-assign commit_dmem_we = 1'b0;
-assign commit_dmem_wa = 32'b0;
-assign commit_dmem_wd = 32'b0;
+assign commit_dmem_we = MEM_WB_dmem_we && commit;
+assign commit_dmem_wa = MEM_WB_dmem_wa;
+assign commit_dmem_wd = MEM_WB_dmem_wd;
 
 assign debug_reg_rd = (commit_reg_we && (commit_reg_wa == debug_reg_ra) && (debug_reg_ra != 5'd0)) ? commit_reg_wd : debug_reg_rd_raw;
 
@@ -525,6 +539,24 @@ ForwardingUnit u_forward(
     .rf_rd1_fe(rf_rd1_fe),
     .rf_rd1_fd(rf_rd1_fd)
 );
+
+
+reg [31:0] total_branches;
+reg [31:0] bpu_hits;
+always @(posedge clk) begin
+    if (rst) begin
+        total_branches <= 0;
+        bpu_hits <= 0;
+    end else if (global_en && valid && ID_EX_is_branch) begin
+        total_branches <= total_branches + 1;
+        if (!pred_mismatch) bpu_hits <= bpu_hits + 1;
+    end
+end
+always @(negedge clk) begin
+    if (commit_halt && commit) begin
+        $display("BPU Stats: Total Branches: %0d, Hits: %0d", total_branches, bpu_hits);
+    end
+end
 
 endmodule
 

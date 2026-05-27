@@ -11,8 +11,13 @@ module CPU(
     // dmem
     output wire [31:0] dmem_addr,
     output wire [31:0] dmem_wdata,
+    output wire [ 3:0] dmem_wmask,  // 新增：字节掩码
     input  wire [31:0] dmem_rdata,
     output wire        dmem_we,
+
+    // cache interface
+    input  wire        cache_miss,  // Cache 未命中信号（由外部 cache 驱动）
+    output wire        dmem_re,     // data memory read enable (EX/MEM stage load)
 
     // trace debug
     output wire        commit,
@@ -244,7 +249,7 @@ always @(posedge clk) begin
         ID_EX_pred_history  <= 2'b0;
         ID_EX_pred_ghr      <= 10'b0;
         ID_EX_pred_is_global<= 1'b0;
-    end else if (global_en && valid && !div_stall) begin
+    end else if (global_en && valid && ID_EX_write && !div_stall) begin
         ID_EX_valid         <= IF_ID_valid;
         ID_EX_pc            <= IF_ID_pc;
         ID_EX_inst          <= IF_ID_inst;
@@ -304,29 +309,20 @@ wire ID_EX_is_div = ID_EX_is_m &&  ID_EX_funct3[2];
 // 乘法：mulhu(funct3==011) 零扩展，mul/mulh 符号扩展到 33 位
 wire [32:0] mul_src1 = (ID_EX_funct3 == 3'b011) ? {1'b0, ex_fw_rv1} : {ex_fw_rv1[31], ex_fw_rv1};
 wire [32:0] mul_src2 = (ID_EX_funct3 == 3'b011) ? {1'b0, ex_fw_rv2} : {ex_fw_rv2[31], ex_fw_rv2};
-wire [65:0] mul_res_66;
-Mul_wallace u_mul(
-    .a(mul_src1),
-    .b(mul_src2),
-    .res(mul_res_66)
-);
+wire [65:0] mul_res_66 = $signed(mul_src1) * $signed(mul_src2);
 wire [31:0] final_mul_res = (ID_EX_funct3 == 3'b000) ? mul_res_66[31:0] : mul_res_66[63:32];
 
 // 除法：funct3 100=div 101=divu 110=rem 111=remu。is_signed=~funct3[0]，funct3[1] 选商/余数
-// 多周期 Radix-2 移位除法器：req 在 EX 段有除法指令时拉高，done 时结果就绪并放行流水线。
+// 使用组合逻辑除法器
 wire [31:0] div_q, div_r;
 wire        div_in_ex = ID_EX_valid && ID_EX_is_div;
-assign      div_stall = div_in_ex && !div_done;   // 除法未完成时停顿流水线
+assign      div_done  = 1'b1; // 组合逻辑立即完成
+assign      div_busy  = 1'b0;
+assign      div_stall = 1'b0; // 组合逻辑不产生额外停顿
 Div u_div(
-    .clk(clk),
-    .rst(rst),
-    .en(global_en && valid),
-    .req(div_in_ex),
     .a(ex_fw_rv1),
     .b(ex_fw_rv2),
     .is_signed(~ID_EX_funct3[0]),
-    .busy(div_busy),
-    .done(div_done),
     .quotient(div_q),
     .remainder(div_r)
 );
@@ -376,7 +372,7 @@ always @(posedge clk) begin
         EX_MEM_is_load       <= 1'b0;
         EX_MEM_funct3        <= 3'b0;
         EX_MEM_is_system     <= 1'b0;
-    end else if (global_en && valid) begin
+    end else if (global_en && valid && EX_MEM_write) begin
         if (div_stall) begin
             // 除法计算期间向 EX/MEM 注入气泡，避免未就绪结果写回/访存
             EX_MEM_valid         <= 1'b0;
@@ -413,16 +409,17 @@ assign dmem_addr = EX_MEM_alu_res;
 assign dmem_we   = EX_MEM_dmem_we && valid && global_en;
 
 wire [1:0] mem_offset = EX_MEM_alu_res[1:0];
-wire [31:0] store_byte = (mem_offset == 2'b00) ? {dmem_rdata[31:8], EX_MEM_store_data[7:0]} :
-                         (mem_offset == 2'b01) ? {dmem_rdata[31:16], EX_MEM_store_data[7:0], dmem_rdata[7:0]} :
-                         (mem_offset == 2'b10) ? {dmem_rdata[31:24], EX_MEM_store_data[7:0], dmem_rdata[15:0]} :
-                                                 {EX_MEM_store_data[7:0], dmem_rdata[23:0]};
 
-wire [31:0] store_half = (mem_offset[1] == 1'b0) ? {dmem_rdata[31:16], EX_MEM_store_data[15:0]} :
-                                                   {EX_MEM_store_data[15:0], dmem_rdata[15:0]};
+// 根据 funct3 和 offset 生成字节掩码和对齐后的写数据
+assign dmem_wmask = (EX_MEM_funct3 == 3'b000) ? (4'b0001 << mem_offset) :
+                    (EX_MEM_funct3 == 3'b001) ? (4'b0011 << (mem_offset[1] ? 2 : 0)) : 
+                    (EX_MEM_dmem_we ? 4'b1111 : 4'b0000);
 
-assign dmem_wdata = (EX_MEM_funct3 == 3'b000) ? store_byte : 
-                    (EX_MEM_funct3 == 3'b001) ? store_half : EX_MEM_store_data;
+assign dmem_wdata = (EX_MEM_funct3 == 3'b000) ? ({24'b0, EX_MEM_store_data[7:0]} << (mem_offset * 8)) :
+                    (EX_MEM_funct3 == 3'b001) ? ({16'b0, EX_MEM_store_data[15:0]} << (mem_offset[1] * 16)) : 
+                    EX_MEM_store_data;
+
+assign dmem_re = EX_MEM_is_load && EX_MEM_valid && valid && global_en;
 
 reg MEM_WB_is_system;
 
@@ -439,7 +436,7 @@ always @(posedge clk) begin
         MEM_WB_is_load       <= 1'b0;
         MEM_WB_funct3        <= 3'b0;
         MEM_WB_is_system     <= 1'b0;
-    end else if (global_en && valid) begin
+    end else if (global_en && valid && MEM_WB_write) begin
         MEM_WB_valid         <= EX_MEM_valid;
         MEM_WB_pc            <= EX_MEM_pc;
         MEM_WB_inst          <= EX_MEM_inst;
@@ -471,7 +468,12 @@ wire [31:0] final_load_data = (MEM_WB_funct3 == 3'b000) ? {{24{load_byte[7]}}, l
                               (MEM_WB_funct3 == 3'b101) ? {16'b0, load_half} : MEM_WB_load_data;
 
 // 生成对外围提供的 commit 提交信息
-assign commit        = valid && global_en && MEM_WB_valid;
+assign commit        = valid && global_en && MEM_WB_valid && MEM_WB_write;
+
+always @(posedge clk) begin
+    $display("clk:%b pc_if:%x id:%x ex_v:%d ex:%x wb_v:%d wb:%x st:%d ms:%d cm:%d", clk, pc, ID_EX_pc, EX_MEM_valid, EX_MEM_pc, MEM_WB_valid, MEM_WB_pc, stall, cache_miss, commit);
+end
+
 assign commit_reg_wd = MEM_WB_is_load ? final_load_data : MEM_WB_alu_res;
 assign commit_reg_we = MEM_WB_reg_we && commit;
 assign commit_reg_wa = MEM_WB_rd;
@@ -488,6 +490,8 @@ assign debug_reg_rd = (commit_reg_we && (commit_reg_wa == debug_reg_ra) && (debu
 // ==========================================
 // 冒险控制单元 (Hazard Unit)
 // ==========================================
+wire ID_EX_write, EX_MEM_write, MEM_WB_write;
+
 HazardUnit u_hazard(
     .rf_ra0_id(id_rs1),
     .rf_ra1_id(id_rs2),
@@ -495,8 +499,14 @@ HazardUnit u_hazard(
     .rf_we_ex(ID_EX_reg_we),
     .rf_wd_sel_ex(ID_EX_is_load),
     .npc_sel_ex(pred_mismatch || jump_taken),
+    .cache_miss(cache_miss),
+    .mem_is_load(EX_MEM_is_load),
+    .mem_is_store(EX_MEM_dmem_we),
     .PC_write(PC_write),
     .IF_ID_write(IF_ID_write),
+    .ID_EX_write(ID_EX_write),
+    .EX_MEM_write(EX_MEM_write),
+    .MEM_WB_write(MEM_WB_write),
     .stall(stall),
     .flush_IF_ID(flush_IF_ID),
     .flush_ID_EX(flush_ID_EX)
@@ -523,5 +533,6 @@ ForwardingUnit u_forward(
 );
 
 endmodule
+
 
 

@@ -26,7 +26,7 @@ public:
     inline constexpr static uint32_t instr_mem_start = 0x00400000;
     inline constexpr static uint32_t instr_mem_depth = 16;
     inline constexpr static const char * instr_mem_ini = "mem/instr.ini";
-    inline constexpr static uint32_t data_mem_start = 0x10010000;
+    inline constexpr static uint32_t data_mem_start = 0x00000000;
     inline constexpr static uint32_t data_mem_depth = 16;
     inline constexpr static const char * data_mem_ini = "mem/data.ini";
 };
@@ -49,7 +49,10 @@ public:
     inline constexpr static CoreType core_type = CoreType::COMPLETE;
 
     // Difftest configs
-    inline constexpr static DifftestLevel difftest_level = DifftestLevel::FULL;
+    // FULL difftest compares DataMem state directly; write-back cache keeps dirty
+    // lines in its BRAM until eviction, so DataMem won't reflect all writes yet.
+    // Use COMMIT-level to compare only instruction commit results (registers).
+    inline constexpr static DifftestLevel difftest_level = DifftestLevel::COMMIT;
     inline constexpr static bool dump_waveform = false;
     inline constexpr static const char * dump_path = "waveform/waveform.vcd";
 

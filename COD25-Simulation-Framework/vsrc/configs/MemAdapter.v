@@ -18,7 +18,7 @@ module MemAdapter (
 
     reg [3:0] state;
     localparam IDLE = 4'd0;
-    localparam R0 = 4'd1, R1 = 4'd2, R2 = 4'd3, R3 = 4'd4, R4 = 4'd5;
+    localparam R0 = 4'd1, R1 = 4'd2, R2 = 4'd3, R3 = 4'd4;
     localparam W0 = 4'd6, W1 = 4'd7, W2 = 4'd8, W3 = 4'd9, W_DONE = 4'd10;
 
     always @(posedge clk) begin
@@ -41,13 +41,14 @@ module MemAdapter (
                         phy_mem_we <= 1'b1;
                     end
                 end
-                
-                // Read: 4 words. Each word takes 1 cycle (BRAM latency).
-                R0: begin phy_mem_addr <= {mem_addr[31:4], 4'b0100}; state <= R1; end
-                R1: begin phy_mem_addr <= {mem_addr[31:4], 4'b1000}; mem_r_data[31:0] <= phy_mem_rdata; state <= R2; end
-                R2: begin phy_mem_addr <= {mem_addr[31:4], 4'b1100}; mem_r_data[63:32] <= phy_mem_rdata; state <= R3; end
-                R3: begin mem_r_data[95:64] <= phy_mem_rdata; state <= R4; end
-                R4: begin mem_r_data[127:96] <= phy_mem_rdata; mem_ready <= 1'b1; state <= IDLE; end
+
+                // Read: 4 words from async DataMem. IDLE sets addr[0]; each Rn state
+                // captures the word already on phy_mem_rdata (combinational) then
+                // advances the address for the next capture.
+                R0: begin mem_r_data[31:0]   <= phy_mem_rdata; phy_mem_addr <= {mem_addr[31:4], 4'b0100}; state <= R1; end
+                R1: begin mem_r_data[63:32]  <= phy_mem_rdata; phy_mem_addr <= {mem_addr[31:4], 4'b1000}; state <= R2; end
+                R2: begin mem_r_data[95:64]  <= phy_mem_rdata; phy_mem_addr <= {mem_addr[31:4], 4'b1100}; state <= R3; end
+                R3: begin mem_r_data[127:96] <= phy_mem_rdata; mem_ready <= 1'b1; state <= IDLE; end
                 
                 // Write: 4 words.
                 W0: begin phy_mem_addr <= {mem_addr[31:4], 4'b0100}; phy_mem_wdata <= mem_w_data[63:32]; state <= W1; end

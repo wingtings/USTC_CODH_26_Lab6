@@ -1,0 +1,45 @@
+--- CPU.v
++++ CPU.v
+@@ -88,6 +88,9 @@
+ reg [ 4:0] MEM_WB_rd;
+ reg        MEM_WB_reg_we, MEM_WB_is_load;
+ reg [ 2:0] MEM_WB_funct3;
++reg        MEM_WB_dmem_we;
++reg [31:0] MEM_WB_dmem_wa;
++reg [31:0] MEM_WB_dmem_wd;
+ 
+ wire [31:0] npc;
+ wire [31:0] id_inst;
+@@ -436,6 +439,9 @@
+         MEM_WB_is_load       <= 1'b0;
+         MEM_WB_funct3        <= 3'b0;
+         MEM_WB_is_system     <= 1'b0;
++        MEM_WB_dmem_we       <= 1'b0;
++        MEM_WB_dmem_wa       <= 32'b0;
++        MEM_WB_dmem_wd       <= 32'b0;
+     end else if (global_en && valid && MEM_WB_write) begin
+         MEM_WB_valid         <= EX_MEM_valid;
+         MEM_WB_pc            <= EX_MEM_pc;
+@@ -447,6 +453,9 @@
+         MEM_WB_is_load       <= EX_MEM_is_load;
+         MEM_WB_funct3        <= EX_MEM_funct3;
+         MEM_WB_is_system     <= EX_MEM_is_system;
++        MEM_WB_dmem_we       <= EX_MEM_dmem_we;
++        MEM_WB_dmem_wa       <= EX_MEM_alu_out;
++        MEM_WB_dmem_wd       <= EX_MEM_reg_wd;
+     end
+ end
+ 
+@@ -481,9 +490,9 @@
+ assign commit_instr  = MEM_WB_inst;
+ assign commit_halt   = MEM_WB_is_system && (MEM_WB_inst == 32'h00100073) && commit;
+ 
+-assign commit_dmem_we = 1'b0;
+-assign commit_dmem_wa = 32'b0;
+-assign commit_dmem_wd = 32'b0;
++assign commit_dmem_we = MEM_WB_dmem_we && commit;
++assign commit_dmem_wa = MEM_WB_dmem_wa;
++assign commit_dmem_wd = MEM_WB_dmem_wd;
+ 
+ assign wait_data_IF_ID = 1'b0;
+ assign wait_data_ID_EX = 1'b0;

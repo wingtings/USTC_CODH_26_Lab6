@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 /*
 直接映射Cache
 - Cache行数：8行
@@ -39,7 +40,8 @@ module cache #(
         SET_NUM   = 1 << INDEX_WIDTH;
 
     // 组相联时的路索引位宽，直接映射时为1
-    localparam  WAY_INDEX_WIDTH = (WAY_NUM > 1) ? $clog2(WAY_NUM) : 1; 
+    localparam  WAY_INDEX_WIDTH = (WAY_NUM > 1) ? $clog2(WAY_NUM) : 1;
+    localparam [WAY_INDEX_WIDTH-1:0] MAX_AGE = WAY_NUM[WAY_INDEX_WIDTH-1:0] - 1'b1;
     
     // Cache相关寄存器
     reg [31:0]           addr_buf;    // 请求地址缓存-用于保留CPU请求地址
@@ -93,7 +95,7 @@ module cache #(
     always @(*) begin
         hit_way_encode = 0;
         for (k=0; k<WAY_NUM; k=k+1) begin
-            if (way_hit[k]) hit_way_encode = k;
+            if (way_hit[k]) hit_way_encode = k[WAY_INDEX_WIDTH-1:0];
         end
     end
     assign hit_way = hit_way_encode;
@@ -104,8 +106,8 @@ module cache #(
         replace_way = 0;
         for (w=0; w<WAY_NUM; w=w+1) begin
             // 优先替换 Invalid 块；否则替换 Age 为 WAY_NUM-1 的块。由于计数器机制最高就是 WAY_NUM-1。
-            if (!valid[w] || (WAY_NUM > 1 && age[w_index][w] == WAY_NUM - 1)) begin
-                replace_way = w;
+            if (!valid[w] || (WAY_NUM > 1 && age[w_index][w] == MAX_AGE)) begin
+                replace_way = w[WAY_INDEX_WIDTH-1:0];
             end
         end
     end
@@ -116,7 +118,7 @@ module cache #(
         if (!rstn) begin
             for (i=0; i<SET_NUM; i=i+1) begin
                 for (j=0; j<WAY_NUM; j=j+1) begin
-                    age[i][j] <= j;  // 初始化分布，避免冲突
+                    age[i][j] <= j[WAY_INDEX_WIDTH-1:0];  // 初始化分布，避免冲突
                 end
             end
         end else begin
@@ -196,7 +198,7 @@ module cache #(
     // 取出将被替换块或者被命中块对应的脏区块地址
     wire [TAG_WIDTH-1:0] target_tag;
     assign target_tag = hit ? r_tag[hit_way] : r_tag[replace_way];
-    assign dirty_mem_addr = {target_tag, w_index}<<(LINE_OFFSET_WIDTH+SPACE_OFFSET);
+    assign dirty_mem_addr = {target_tag, w_index, {(LINE_OFFSET_WIDTH+SPACE_OFFSET){1'b0}}};
 
     // 写回地址、数据寄存器
     reg [31:0] dirty_mem_addr_buf;
@@ -262,9 +264,7 @@ module cache #(
 
     // 写入Cache 这里要判断是命中后写入还是未命中后写入
     wire [LINE_WIDTH-1:0] byte_mask_expanded;
-    assign byte_mask_expanded = {
-        {8{w_mask[3]}}, {8{w_mask[2]}}, {8{w_mask[1]}}, {8{w_mask[0]}}
-    };
+    assign byte_mask_expanded = {{(LINE_WIDTH-32){1'b0}}, {8{w_mask[3]}}, {8{w_mask[2]}}, {8{w_mask[1]}}, {8{w_mask[0]}}};
     
     assign w_line_mask = byte_mask_expanded << (word_offset*32);   // 写入数据掩码 (改为字节级)
     assign w_data_line = {{(LINE_WIDTH-32){1'b0}}, w_data_buf} << (word_offset*32);     // 写入数据移位
@@ -363,10 +363,10 @@ module cache #(
     always @(*) begin
         addr_buf_we   = 1'b0;
         ret_buf_we    = 1'b0;
-        data_we       = 1'b0;
-        tag_we        = 1'b0;
-        w_valid       = 1'b0;
-        w_dirty       = 1'b0;
+        data_we       = {WAY_NUM{1'b0}};
+        tag_we        = {WAY_NUM{1'b0}};
+        w_valid       = {WAY_NUM{1'b0}};
+        w_dirty       = {WAY_NUM{1'b0}};
         data_from_mem = 1'b0;
         miss          = 1'b0;
         mem_r         = 1'b0;
@@ -376,7 +376,10 @@ module cache #(
         case(CS)
             IDLE: begin
                 addr_buf_we = 1'b1; // 请求地址缓存写使能
-                miss = 1'b0;
+                // Stall the pipeline for the first cycle of any access so the
+                // synchronous BRAM inside cache has one clock to register the
+                // address before READ can evaluate hit/miss.
+                miss = r_req || w_req;
                 ret_buf_we = 1'b0;
                 if(refill) begin
                     data_from_mem = 1'b1;

@@ -27,13 +27,16 @@ module HazardUnit(
     // Let's assume cache_miss is 1 until hit/refill is confirmed.
     wire mem_stall = (mem_is_load || mem_is_store) && cache_miss;
 
+    always @* begin
+        $display("Hazard: lu=%d mem_st=%d rf_we_ex=%d rf_wd_sel_ex=%d rf_wa_ex=%d rf_ra0_id=%d rf_ra1_id=%d", load_use_hazard, mem_stall, rf_we_ex, rf_wd_sel_ex, rf_wa_ex, rf_ra0_id, rf_ra1_id);
+    end
 
     assign stall        = load_use_hazard || mem_stall;
     assign PC_write     = ~stall;
     assign IF_ID_write  = ~stall;
-    assign ID_EX_write  = ~mem_stall;
-    assign EX_MEM_write = ~mem_stall;
-    assign MEM_WB_write = ~mem_stall;
+    assign ID_EX_write  = ~stall;
+    assign EX_MEM_write = ~stall;
+    assign MEM_WB_write = ~stall;
     
     wire control_hazard = npc_sel_ex;
     
@@ -44,5 +47,5 @@ module HazardUnit(
     // Note: mem_stall shouldn't flush ID/EX because we are freezing the whole pipe.
     assign flush_ID_EX = (load_use_hazard && !mem_stall) || control_hazard;
 
-
 endmodule
+

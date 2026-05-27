@@ -1,0 +1,18 @@
+--- HazardUnit.v
++++ HazardUnit.v
+@@ -21,12 +21,12 @@
+     wire mem_stall = (mem_is_load || mem_is_store) && cache_miss;
+ 
+     assign stall        = load_use_hazard || mem_stall;
+     assign PC_write     = ~stall;
+     assign IF_ID_write  = ~stall;
+-    assign ID_EX_write  = ~stall;
+-    assign EX_MEM_write = ~stall;
+-    assign MEM_WB_write = ~stall;
++    assign ID_EX_write  = ~mem_stall;
++    assign EX_MEM_write = ~mem_stall;
++    assign MEM_WB_write = ~mem_stall;
+     
+ 
+ 
+ 
