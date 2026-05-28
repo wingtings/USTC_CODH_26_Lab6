@@ -309,9 +309,10 @@ wire ID_EX_is_m   = (ID_EX_inst[6:0] == 7'b0110011) && (ID_EX_funct7 == 7'b00000
 wire ID_EX_is_mul = ID_EX_is_m && ~ID_EX_funct3[2];
 wire ID_EX_is_div = ID_EX_is_m &&  ID_EX_funct3[2];
 
-// 乘法：mulhu(funct3==011) 零扩展，mul/mulh 符号扩展到 33 位
+// RV32M mulhsu support
+// RV32M mul extensions
 wire [32:0] mul_src1 = (ID_EX_funct3 == 3'b011) ? {1'b0, ex_fw_rv1} : {ex_fw_rv1[31], ex_fw_rv1};
-wire [32:0] mul_src2 = (ID_EX_funct3 == 3'b011) ? {1'b0, ex_fw_rv2} : {ex_fw_rv2[31], ex_fw_rv2};
+wire [32:0] mul_src2 = ((ID_EX_funct3 == 3'b011) || (ID_EX_funct3 == 3'b010)) ? {1'b0, ex_fw_rv2} : {ex_fw_rv2[31], ex_fw_rv2};
 wire [65:0] mul_res_66 = $signed(mul_src1) * $signed(mul_src2);
 wire [31:0] final_mul_res = (ID_EX_funct3 == 3'b000) ? mul_res_66[31:0] : mul_res_66[63:32];
 

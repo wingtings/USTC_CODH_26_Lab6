@@ -122,11 +122,19 @@ protected:
     }
     template<typename __Derived_>
     inline uint32_t divide_impl(const Argument<__Configs, __Derived_> & _rhs) const {
-        return static_cast<const __Derived *>(this)->get_value_signed() / _rhs.get_value_signed();
+        int32_t a = static_cast<const __Derived *>(this)->get_value_signed();
+        int32_t b = _rhs.get_value_signed();
+        if (b == 0) return 0xFFFFFFFF;
+        if (b == -1 && a == (int32_t)0x80000000) return a;
+        return a / b;
     }
     template<typename __Derived_>
     inline uint32_t modulus_impl(const Argument<__Configs, __Derived_> & _rhs) const {
-        return static_cast<const __Derived *>(this)->get_value_signed() % _rhs.get_value_signed();
+        int32_t a = static_cast<const __Derived *>(this)->get_value_signed();
+        int32_t b = _rhs.get_value_signed();
+        if (b == 0) return a;
+        if (b == -1 && a == (int32_t)0x80000000) return 0;
+        return a % b;
     }
     template<typename __Derived_>
     inline uint32_t less_than_impl(const Argument<__Configs, __Derived_> & _rhs) const {
@@ -176,11 +184,17 @@ protected:
     }
     template<typename __Derived_>
     inline uint32_t divide_impl(const Argument<__Configs, __Derived_> & _rhs) const {
-        return static_cast<const __Derived *>(this)->get_value_unsigned() / _rhs.get_value_unsigned();
+        uint32_t a = static_cast<const __Derived *>(this)->get_value_unsigned();
+        uint32_t b = _rhs.get_value_unsigned();
+        if (b == 0) return 0xFFFFFFFF;
+        return a / b;
     }
     template<typename __Derived_>
     inline uint32_t modulus_impl(const Argument<__Configs, __Derived_> & _rhs) const {
-        return static_cast<const __Derived *>(this)->get_value_unsigned() % _rhs.get_value_unsigned();
+        uint32_t a = static_cast<const __Derived *>(this)->get_value_unsigned();
+        uint32_t b = _rhs.get_value_unsigned();
+        if (b == 0) return a;
+        return a % b;
     }
     template<typename __Derived_>
     inline uint32_t less_than_impl(const Argument<__Configs, __Derived_> & _rhs) const {

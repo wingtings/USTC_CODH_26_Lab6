@@ -140,4 +140,14 @@ void conditional_assign(__Dest<__Configs> && _dest, __Src1<__Configs> && _cond, 
     _dest = _rhs;
 }
 
+template<typename __Configs, template<typename> typename __Dest, template<typename> typename __Src1, template<typename> typename __Src2>
+void multiply_high_signed_unsigned(__Dest<__Configs> && _dest, __Src1<__Configs> && _lhs, __Src2<__Configs> && _rhs) {
+    static_assert(is_argument<__Configs, __Dest<__Configs>>::value && is_constant_argument<__Configs, __Src1<__Configs>>::value && is_constant_argument<__Configs, __Src2<__Configs>>::value, "Invalid arguments");
+    uint32_t val1 = _lhs.get_value_unsigned();
+    uint32_t val2 = _rhs.get_value_unsigned();
+    int64_t lhs = (int32_t)val1;
+    uint64_t rhs = (uint32_t)val2;
+    uint32_t res = (uint32_t)((lhs * rhs) >> 32);
+    _dest = res;
+}
 #endif // __OPERATORS_HPP__

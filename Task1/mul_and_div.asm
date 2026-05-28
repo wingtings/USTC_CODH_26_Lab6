@@ -57,6 +57,6 @@ _start:
     div s0, t0, t1      # 溢出处理：预期 s0 = 被除数 (0x80000000)
     rem s1, t0, t1      # 溢出处理：预期 s1 = 0
 
-    # 测试结束，进入死循环
+    # 测试结束：ebreak 触发仿真 halt（difftest 的终止条件）
 end:
-    j end
+    ebreak

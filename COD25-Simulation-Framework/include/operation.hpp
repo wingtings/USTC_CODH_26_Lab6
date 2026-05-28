@@ -56,4 +56,5 @@ std::unique_ptr<Operation<__Configs, __Tps...>> make_operation(void (*_func)(dec
     return std::unique_ptr<Operation<__Configs, __Tps...>>(new Operation(_func, _args...));
 }
 
+
 #endif // __OPERATION_HPP__

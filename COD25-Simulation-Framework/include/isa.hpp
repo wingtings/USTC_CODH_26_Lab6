@@ -645,6 +645,14 @@ private:
                 res.push_back(make_operation(assign, RegWdGenerator<__Configs>(), ConstUnsignedRegisterGenerator<__Configs>(rd)));
                 return res;
             }
+            case 0B01010: {
+                // mulhsu
+                res.push_back(make_operation(multiply_high_signed_unsigned, UnsignedRegisterGenerator<__Configs>(rd), ConstSignedRegisterGenerator<__Configs>(rs1), ConstUnsignedRegisterGenerator<__Configs>(rs2)));
+                res.push_back(make_operation(assign, RegWeGenerator<__Configs>(), UnsignedImmGenerator<__Configs>(1)));
+                res.push_back(make_operation(assign, RegWaGenerator<__Configs>(), UnsignedImmGenerator<__Configs>(rd)));
+                res.push_back(make_operation(assign, RegWdGenerator<__Configs>(), ConstUnsignedRegisterGenerator<__Configs>(rd)));
+                return res;
+            }
             case 0B01011: {
                 // mulhu
                 res.push_back(make_operation(multiply_high, UnsignedRegisterGenerator<__Configs>(rd), ConstUnsignedRegisterGenerator<__Configs>(rs1), ConstUnsignedRegisterGenerator<__Configs>(rs2)));
